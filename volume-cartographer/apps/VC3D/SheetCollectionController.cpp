@@ -126,14 +126,38 @@ QColor affinityColour(double a)
 QColor affinityBucketColour(int b) { return affinityColour((b + 0.5) / kMetricBuckets); }
 
 // --- GASP agglomeration ------------------------------------------------------
-// Average-linkage GASP (Generalized Algorithm for Signed graph Partitioning) over a signed
-// weighted graph: repeatedly merge the pair of clusters with the highest AVERAGE inter-cluster
-// edge weight while that average is positive; a negative (repulsive) accumulation blocks a
-// merge, so no threshold is needed. `n` nodes labelled 0..n-1; `edges` are {u, v, w} triples
-// (pre-aggregate duplicate pairs by mean before calling). Returns each node's cluster label
-// (a representative node id). Lazy priority queue: a stale entry (whose recomputed average no
+// GASP (Generalized Algorithm for Signed graph Partitioning) over a signed weighted graph:
+// repeatedly merge the cluster pair with the highest LINKAGE score while that score is positive;
+// a non-positive (repulsive) score blocks the merge, so no threshold is needed. The linkage sets
+// how a pair's many signed edges reduce to one priority — the tested axis of Bailoni et al. (CVPR
+// 2022): Average (mean — merge-happiest, a few positives outvote the negatives), Complete (min —
+// the single most-repulsive edge vetoes the merge), Percentile (p-th percentile; p=0 == Complete,
+// 100 == most-attractive; a robust middle ground). `n` nodes 0..n-1; `edges` are {u, v, w} triples,
+// one PER raw affinity (duplicates across corners/directions are kept, NOT pre-averaged, so the
+// linkage sees the full signed multiset). Lazy priority queue: a stale entry (recomputed score no
 // longer matches, or has gone non-positive) is skipped.
-std::vector<int> gaspAverageLinkage(int n, const std::vector<std::tuple<int, int, double>>& edges)
+// TEMP: the linkage is selectable for tuning; collapse to the chosen one once picked.
+enum class Linkage { Average, Complete, Percentile };
+
+static double linkageScore(std::vector<double>& w, Linkage mode, double pct)
+{
+    if (w.empty())
+        return 0.0;
+    if (mode == Linkage::Average) {
+        double s = 0.0;
+        for (double x : w) s += x;
+        return s / double(w.size());
+    }
+    if (mode == Linkage::Complete)
+        return *std::min_element(w.begin(), w.end());
+    // Percentile: p=0 -> min, p=100 -> max. nth_element reorders w in place (harmless: it is a multiset).
+    const size_t k = size_t(std::clamp(pct, 0.0, 100.0) / 100.0 * double(w.size() - 1) + 0.5);
+    std::nth_element(w.begin(), w.begin() + k, w.end());
+    return w[k];
+}
+
+std::vector<int> gaspLinkage(int n, const std::vector<std::tuple<int, int, double>>& edges,
+                             Linkage mode, double pct)
 {
     std::vector<int> parent(n);
     std::iota(parent.begin(), parent.end(), 0);
@@ -141,20 +165,20 @@ std::vector<int> gaspAverageLinkage(int n, const std::vector<std::tuple<int, int
         while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
         return x;
     };
-    // Current cluster adjacency: root -> (neighbour root -> {summed weight, edge count}).
-    std::vector<std::unordered_map<int, std::pair<double, long long>>> adj(n);
+    // Current cluster adjacency: root -> (neighbour root -> the multiset of inter-cluster edge weights).
+    std::vector<std::unordered_map<int, std::vector<double>>> adj(n);
     for (const auto& [u, v, w] : edges) {
         if (u == v || u < 0 || v < 0 || u >= n || v >= n)
             continue;
-        auto& a = adj[u][v]; a.first += w; a.second += 1;
-        auto& b = adj[v][u]; b.first += w; b.second += 1;
+        adj[u][v].push_back(w);
+        adj[v][u].push_back(w);
     }
-    using QE = std::tuple<double, int, int>;  // (average weight, root u, root v), max-first
+    using QE = std::tuple<double, int, int>;  // (linkage score, root u, root v), max-first
     std::priority_queue<QE> pq;
     for (int u = 0; u < n; ++u)
-        for (const auto& [v, sc] : adj[u])
+        for (auto& [v, wl] : adj[u])
             if (u < v) {
-                const double a = sc.first / double(sc.second);
+                const double a = linkageScore(wl, mode, pct);
                 if (a > 0.0)
                     pq.emplace(a, u, v);
             }
@@ -167,22 +191,22 @@ std::vector<int> gaspAverageLinkage(int n, const std::vector<std::tuple<int, int
         const auto it = adj[ru].find(rv);
         if (it == adj[ru].end())
             continue;
-        const double cur = it->second.first / double(it->second.second);
+        const double cur = linkageScore(it->second, mode, pct);
         if (cur <= 0.0 || std::abs(cur - w) > 1e-9)
             continue;  // stale: a fresher entry exists, or the merge turned repulsive
-        // Merge rv into ru: fold rv's adjacency into ru's and redirect its neighbours.
-        for (const auto& [x, sc] : adj[rv]) {
+        // Merge rv into ru: fold rv's edge multisets into ru's and redirect its neighbours.
+        for (auto& [x, wl] : adj[rv]) {
             if (x == ru)
                 continue;
-            auto& into = adj[ru][x]; into.first += sc.first; into.second += sc.second;
-            auto& back = adj[x]; auto& be = back[ru]; be.first += sc.first; be.second += sc.second;
-            back.erase(rv);
+            auto& into = adj[ru][x]; into.insert(into.end(), wl.begin(), wl.end());
+            auto& back = adj[x][ru]; back.insert(back.end(), wl.begin(), wl.end());
+            adj[x].erase(rv);
         }
         adj[ru].erase(rv);
         adj[rv].clear();
         parent[rv] = ru;
-        for (const auto& [x, sc] : adj[ru]) {
-            const double a = sc.first / double(sc.second);
+        for (auto& [x, wl] : adj[ru]) {
+            const double a = linkageScore(wl, mode, pct);
             if (a > 0.0)
                 pq.emplace(a, ru, x);
         }
@@ -545,6 +569,28 @@ SheetCollectionController::SheetCollectionController(ViewerManager* manager, QMa
     autoLay->addWidget(autoRadius_);
     layout->addWidget(autoRow);
 
+    // TEMP (tuning): choose the GASP linkage so Average / Complete / Percentile can be compared by eye.
+    // Collapse to the winning one and drop this row once picked.
+    auto* linkRow = new QWidget(body);
+    auto* linkLay = new QHBoxLayout(linkRow);
+    linkLay->setContentsMargins(0, 0, 0, 0);
+    linkLay->addWidget(new QLabel(tr("Linkage"), linkRow));
+    linkageMode_ = new QComboBox(linkRow);
+    linkageMode_->addItem(tr("Average"));          // index 0 -> Linkage::Average
+    linkageMode_->addItem(tr("Complete (min)"));   // index 1 -> Linkage::Complete
+    linkageMode_->addItem(tr("Percentile"));       // index 2 -> Linkage::Percentile
+    linkageMode_->setToolTip(tr("How a sheet-pair's many signed affinities reduce to one merge score: "
+                                "Average merges whenever the mean is positive; Complete lets the single "
+                                "most-negative edge veto the merge; Percentile uses the p-th percentile."));
+    linkagePct_ = new QSpinBox(linkRow);
+    linkagePct_->setRange(0, 100);
+    linkagePct_->setValue(20);
+    linkagePct_->setSuffix(tr(" %ile"));
+    linkagePct_->setToolTip(tr("Percentile p for Linkage = Percentile (0 = Complete/min, 100 = most attractive)."));
+    linkLay->addWidget(linkageMode_, 1);
+    linkLay->addWidget(linkagePct_);
+    layout->addWidget(linkRow);
+
     layout->addStretch(1);
 
     dock_->setWidget(body);
@@ -805,27 +851,23 @@ void SheetCollectionController::autoStitch()
     for (int i = 0; i < int(nodes.size()); ++i)
         idx[nodes[i]] = i;
 
-    // Edges among candidates, with duplicate pairs (both directions + several corners)
-    // aggregated to the mean logit (docs §9.1).
-    const long long M = (long long)nodes.size();
-    std::unordered_map<long long, std::pair<double, long long>> acc;  // key = a*M + b with a<b
+    // Edges among candidates: one per RAW affinity (both directions, every corner), NOT pre-averaged,
+    // so the linkage sees the full signed multiset — the per-corner negatives, not just their mean.
+    std::vector<std::tuple<int, int, double>> edges;
     for (int64_t c : nodes) {
         const int iu = idx[c];
         for (const auto& [dst, logit] : reader_->affinities(c)) {
             const auto jt = idx.find(dst);
             if (jt == idx.end() || jt->second == iu)
                 continue;
-            const int a = std::min(iu, jt->second), b = std::max(iu, jt->second);
-            auto& e = acc[(long long)a * M + b];
-            e.first += logit; e.second += 1;
+            edges.emplace_back(iu, jt->second, logit);
         }
     }
-    std::vector<std::tuple<int, int, double>> edges;
-    edges.reserve(acc.size());
-    for (const auto& [k, e] : acc)
-        edges.emplace_back(int(k / M), int(k % M), e.first / double(e.second));
 
-    const std::vector<int> label = gaspAverageLinkage(int(nodes.size()), edges);
+    // TEMP: linkage chosen in the panel (default Average == the previous behaviour).
+    const Linkage mode = linkageMode_ ? Linkage(linkageMode_->currentIndex()) : Linkage::Average;
+    const double pct = linkagePct_ ? double(linkagePct_->value()) : 20.0;
+    const std::vector<int> label = gaspLinkage(int(nodes.size()), edges, mode, pct);
     const int seedLabel = label[idx[ref]];
     int added = 0;
     for (int i = 0; i < int(nodes.size()); ++i)

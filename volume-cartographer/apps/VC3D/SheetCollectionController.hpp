@@ -163,6 +163,8 @@ private:
     QDoubleSpinBox* maxFitRms_{};      // hide sheets with worse mesh-vs-mask RMS (um); 0 = off
     QPushButton* autoStitch_{};        // GASP auto-expand the stitch from the latest selected sheet
     QSpinBox* autoRadius_{};           // window-neighbourhood radius for auto-stitch (±N windows)
+    QComboBox* linkageMode_{};         // TEMP (tuning): GASP linkage — Average / Complete / Percentile
+    QSpinBox* linkagePct_{};           // TEMP (tuning): percentile p used when linkageMode_ == Percentile
 
     std::unique_ptr<vc::sheets::SheetCollection> reader_;  // UI-thread: metadata/count only
     QString path_;
