@@ -70,6 +70,7 @@ class SurfaceCatalog;
 class StoreSurfaceOverlayController;
 class StoreMeshOverlayController;
 class MenuActionController;
+class StoreImportController;
 class VolumeAttachmentController;
 class SegmentationGrower;
 class ViewerControlsPanel;
@@ -99,6 +100,7 @@ class CWindow : public QMainWindow
     Q_OBJECT
 
     friend class MenuActionController;
+    friend class StoreImportController;
     friend class VolumeAttachmentController;
     friend class AgentBridgeServer;
 
@@ -350,6 +352,7 @@ private:
     std::unique_ptr<SurfaceCatalog> _surfaceCatalog;
     std::unique_ptr<SurfacePanelController> _surfacePanel;
     std::unique_ptr<VolumeAttachmentController> _volumeAttachmentController;
+    std::unique_ptr<StoreImportController> _storeImportController;
     std::unique_ptr<MenuActionController> _menuController;
     // runner for command line tools
     CommandLineToolRunner* _cmdRunner;
