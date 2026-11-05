@@ -46,6 +46,11 @@ CREATE TABLE tracks(
   bbox_min_x REAL, bbox_min_y REAL, bbox_min_z REAL, bbox_max_x REAL, bbox_max_y REAL, bbox_max_z REAL
 );
 CREATE UNIQUE INDEX tracks_identity ON tracks(dataset_ref, external_key) WHERE external_key<>'';
+CREATE TABLE meshes(
+  object_id INTEGER PRIMARY KEY REFERENCES objects(id) ON DELETE CASCADE,
+  vert_count INTEGER NOT NULL DEFAULT 0, face_count INTEGER NOT NULL DEFAULT 0,
+  bbox_min_x REAL, bbox_min_y REAL, bbox_min_z REAL, bbox_max_x REAL, bbox_max_y REAL, bbox_max_z REAL
+);
 CREATE TABLE object_tags(
   object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
   tag TEXT NOT NULL, PRIMARY KEY(object_id, tag)

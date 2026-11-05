@@ -47,6 +47,7 @@ RegionKind regionKind(const std::string& kind)
     if (kind == "fiber") return {"fibers", {"line_points", "control_points"}, "<f8", 24};
     if (kind == "track") return {"tracks", {"points"}, "<i4", 12};
     if (kind == "surface") return {"surfaces", {"points"}, "<f4", 12, true};
+    if (kind == "mesh") return {"meshes", {"vertices", "faces"}, "<f4", 12};
     throw std::invalid_argument("geometry region does not support kind: " + kind);
 }
 struct RequestScope {

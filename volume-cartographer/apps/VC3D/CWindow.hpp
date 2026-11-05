@@ -68,6 +68,7 @@ class SegmentationModule;
 class SurfacePanelController;
 class SurfaceCatalog;
 class StoreSurfaceOverlayController;
+class StoreMeshOverlayController;
 class MenuActionController;
 class VolumeAttachmentController;
 class SegmentationGrower;
@@ -342,6 +343,7 @@ private:
     std::unique_ptr<InkDetectionOverlayController> _inkDetectionOverlay;
     std::unique_ptr<PlaneSlicingOverlayController> _planeSlicingOverlay;
     std::unique_ptr<StoreSurfaceOverlayController> _storeSurfaceOverlay;
+    std::unique_ptr<StoreMeshOverlayController> _storeMeshOverlay;
     std::unique_ptr<SurfaceRotationOverlayController> _surfaceRotationOverlay;
     std::unique_ptr<FiberCollectionController> _fiberCollection;
     std::unique_ptr<SegmentationModule> _segmentationModule;

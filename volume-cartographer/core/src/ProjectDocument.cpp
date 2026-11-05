@@ -30,7 +30,7 @@ bool hasWritePermission(const std::filesystem::path& path) {
 }
 }
 const std::vector<std::string>& ProjectDocument::kinds() {
-    static const std::vector<std::string> value{"surface", "fiber", "point_collection", "umbilicus", "volume_transform"};
+    static const std::vector<std::string> value{"surface", "fiber", "point_collection", "umbilicus", "volume_transform", "mesh"};
     return value;
 }
 void ProjectDocument::validate(const nlohmann::json& data) {
@@ -50,6 +50,7 @@ void ProjectDocument::validate(const nlohmann::json& data) {
     const auto& routes = data.at("selections");
     if (!routes.is_object()) throw std::invalid_argument("Project selections must be an object");
     for (const auto& kind : kinds()) {
+        if (!routes.contains(kind)) continue;   // a kind added after this project was written is simply unset
         const auto& id = routes.at(kind);
         if (!id.is_null() && (!id.is_string() || !ids.contains(id.get<std::string>())))
             throw std::invalid_argument("Selection references an unknown store: " + kind);

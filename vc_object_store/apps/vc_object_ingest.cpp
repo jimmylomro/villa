@@ -11,6 +11,7 @@ try {
     std::vector<Channel> channels;
     std::vector<std::string> tags;
     bool showProgress = true;
+    std::string coordinateContext = "{}";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> std::string {
@@ -20,6 +21,7 @@ try {
         if (arg == "--db") path = next();
         else if (arg == "--author") author = next();
         else if (arg == "--surface") sources.emplace_back("surface", next());
+        else if (arg == "--mesh") sources.emplace_back("mesh", next());
         else if (arg == "--fiber") sources.emplace_back("fiber", next());
         else if (arg == "--point-collections") sources.emplace_back("point_collection", next());
         else if (arg == "--umbilicus") sources.emplace_back("umbilicus", next());
@@ -29,10 +31,15 @@ try {
             channels.push_back(std::move(channel));
         }
         else if (arg == "--tag") tags.push_back(next());
+        else if (arg == "--coordinates") {
+            const std::string vol = next(); const std::string scale = next();
+            coordinateContext = "{\"volume_uuid\":\"" + vol + "\",\"scale_factor\":" + scale + "}";
+        }
         else if (arg == "--no-progress") showProgress = false;
         else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: vc_object_ingest --db objects.vcobj --author NAME [options]\n"
                 "  --surface DIR               import a new tifxyz surface, or a folder of them\n"
+                "  --mesh PLY                  import a new triangle mesh from a binary-little-endian PLY\n"
                 "  --fiber PATH              import new fibers from JSON or a directory\n"
                 "  --point-collections FILE  import new collections from a JSON\n"
                 "  --umbilicus FILE          import a new umbilicus from a vc_umbilicus JSON\n"
@@ -40,6 +47,7 @@ try {
                 "  --surface-channel UUID NAME TIFF\n"
                 "                            add or replace a channel of a stored surface\n"
                 "  --tag NAME                tag every imported object (repeatable)\n"
+                "  --coordinates UUID SCALE  bind imported geometry to volume UUID at SCALE stored-units/voxel\n"
                 "  --no-progress             suppress progress display\n"
                 "Fiber/collection sources commit atomically; tracks commit individually. Failures are reported and exit status is nonzero.\n"
                 "Source flags are repeatable. Existing object identities are errors, even when unchanged.\n"
@@ -59,7 +67,7 @@ try {
     };
     for (const auto& [kind, source] : sources) {
         vc::objects::util::TerminalProgress progress("Ingest " + kind, showProgress);
-        const auto report = vc::objects::ingestGeometrySource(db, kind, source, progress.callback(), "{}", tags);
+        const auto report = vc::objects::ingestGeometrySource(db, kind, source, progress.callback(), coordinateContext, tags);
         progress.finish(); print(report);
     }
     for (const auto& channel : channels) {

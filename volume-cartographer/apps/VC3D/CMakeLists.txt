@@ -188,6 +188,8 @@ set(srcs
     overlays/SegmentationOverlayController.cpp
     overlays/StoreSurfaceOverlayController.cpp
     overlays/StoreSurfaceOverlayController.hpp
+    overlays/StoreMeshOverlayController.cpp
+    overlays/StoreMeshOverlayController.hpp
     SurfaceIntersectionStyle.hpp
     overlays/SegmentationOverlayController.hpp
     overlays/PointsOverlayController.cpp

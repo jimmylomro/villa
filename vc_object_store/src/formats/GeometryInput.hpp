@@ -11,6 +11,8 @@ ObjectRecord sourceObject(const nlohmann::json&, const std::string&, const std::
 Prepared fiber(const std::filesystem::path&);
 std::vector<Prepared> fibers(const std::filesystem::path&, const std::vector<std::string>& available);
 Prepared surface(const std::filesystem::path&);
+// Decode a raw triangle mesh from a binary-little-endian PLY as a `mesh` kind (vertices + faces arrays).
+Prepared mesh(const std::filesystem::path&);
 // The same without the source's identity (meta.json uuid/name): its geometry,
 // grid detail and source meta only.
 Prepared surfaceGeometry(const std::filesystem::path&);

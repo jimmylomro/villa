@@ -109,6 +109,7 @@
 #include "segmentation/growth/SegmentationGrower.hpp"
 #include "SurfaceCatalog.hpp"
 #include "overlays/StoreSurfaceOverlayController.hpp"
+#include "overlays/StoreMeshOverlayController.hpp"
 #include "SurfacePanelController.hpp"
 #include "elements/GrowOnlyLabel.hpp"
 #include "MenuActionController.hpp"
@@ -1110,6 +1111,13 @@ CWindow::CWindow(size_t cacheSizeGB) :
     // create menus/actions controller
     _menuController = std::make_unique<MenuActionController>(this);
     _menuController->populateMenus(menuBar());
+    // View > Meshes visibility -> mesh overlay. Must be wired here, not in
+    // CreateWidgets(): _menuController does not exist yet while that runs, so the
+    // handler set there would silently no-op and toggles would never reach the overlay.
+    if (_storeMeshOverlay)
+        _menuController->setMeshVisibilityHandler([this](const std::vector<std::string>& uuids) {
+            if (_storeMeshOverlay) _storeMeshOverlay->setMeshes(uuids);
+        });
     connect(_menuController.get(), &MenuActionController::growTrackPatchesFromMenuRequested,
             this, [this]() {
                 _segmentationCommandHandler->onGrowTrackPatches();
@@ -2715,6 +2723,9 @@ void CWindow::CreateWidgets(void)
         [this]() { return segmentationViewer(); },
         this);
     _storeSurfaceOverlay = std::make_unique<StoreSurfaceOverlayController>(_state, _viewerManager.get(), this);
+    _storeMeshOverlay = std::make_unique<StoreMeshOverlayController>(_state, _viewerManager.get(), this);
+    // NB: the View > Meshes handler is wired after _menuController is created (in
+    // the constructor), not here -- _menuController is still null during CreateWidgets().
     connect(_surfacePanel.get(), &SurfacePanelController::visibleSurfacesChanged,
             _storeSurfaceOverlay.get(), &StoreSurfaceOverlayController::setSurfaces);
     connect(_surfacePanel.get(), &SurfacePanelController::highlightedSurfacesChanged,

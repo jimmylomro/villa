@@ -40,6 +40,8 @@
 #include <vc_object_store/Uuid.hpp>
 #include <vc_object_store/objects/CatalogStore.hpp>
 #include <vc_object_store/objects/Project.hpp>
+#include <vc_object_store/objects/ObjectStore.hpp>
+#include <vc_object_store/objects/ObjectStoreSession.hpp>
 #include <vc_object_store/objects/GeometryIngest.hpp>
 #include <vc_object_store/objects/VolumeUmbilicus.hpp>
 #include "vc/fiber_tracer/FiberTrace.hpp"
@@ -268,6 +270,9 @@ void MenuActionController::populateMenus(QMenuBar* menuBar)
     _viewMenu->addAction(_resetViewsAct);
     _viewMenu->addSeparator();
     _viewMenu->addAction(_showConsoleAct);
+    _viewMenu->addSeparator();
+    _meshesMenu = _viewMenu->addMenu(QObject::tr("Meshes"));
+    connect(_meshesMenu, &QMenu::aboutToShow, this, &MenuActionController::refreshMeshesMenu);
 
     _actionsMenu = new QMenu(QObject::tr("&Actions"), qWindow);
     _actionsMenu->addAction(_drawBBoxAct);
@@ -2113,6 +2118,44 @@ bool MenuActionController::requireProject(const QString& purpose)
     return _window->_state->hasVpkg();
 }
 
+void MenuActionController::refreshMeshesMenu()
+{
+    if (!_meshesMenu || !_window || !_window->_state) return;
+    _meshesMenu->clear();
+    auto& state = *_window->_state;
+    const auto session = state.objectStoreSession();
+    const auto store = state.storeFor("mesh");
+    if (!session || !store) {
+        _meshesMenu->addAction(QObject::tr("(pick a store: File > Stores > Show Meshes From)"))->setEnabled(false);
+        return;
+    }
+    std::vector<std::pair<std::string, std::string>> meshes;   // (uuid, display name)
+    try {
+        session->read(*store, [&](const vc::objects::ObjectStore& db, const vc::objects::ReadTxn& txn,
+                                  const std::atomic_bool&) {
+            for (const auto& record : db.objectsByKind(txn, "mesh"))
+                meshes.emplace_back(record.uuid, record.name.empty() ? record.uuid : record.name);
+        });
+    } catch (const std::exception&) {
+    }
+    if (meshes.empty()) {
+        _meshesMenu->addAction(QObject::tr("(no meshes in this store)"))->setEnabled(false);
+        return;
+    }
+    for (const auto& [uuid, name] : meshes) {
+        auto* act = _meshesMenu->addAction(QString::fromStdString(name));
+        act->setCheckable(true);
+        act->setChecked(_visibleMeshes.count(uuid) != 0);
+        const std::string id = uuid;
+        connect(act, &QAction::toggled, this, [this, id](bool on) {
+            if (on) _visibleMeshes.insert(id);
+            else _visibleMeshes.erase(id);
+            if (_onMeshVisibility)
+                _onMeshVisibility(std::vector<std::string>(_visibleMeshes.begin(), _visibleMeshes.end()));
+        });
+    }
+}
+
 void MenuActionController::refreshStoresMenu()
 {
     if (!_storesMenu || !_window || !_window->_state) return;
@@ -2137,6 +2180,7 @@ void MenuActionController::refreshStoresMenu()
         {"fiber", QObject::tr("Show Fibers From")},
         {"point_collection", QObject::tr("Show Point Collections From")},
         {"umbilicus", QObject::tr("Show Umbilici From")},
+        {"mesh", QObject::tr("Show Meshes From")},
         {"volume_transform", QObject::tr("Use Registrations From")}};
     for (const auto& [kind, title] : kinds) {
         auto* menu = _storesMenu->addMenu(title);

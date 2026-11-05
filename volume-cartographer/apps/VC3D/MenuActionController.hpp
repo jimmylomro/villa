@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,12 @@ public:
     void populateMenus(QMenuBar* menuBar);
     void updateRecentVolpkgList(const QString& path);
     void refreshRecentMenu();
+
+    // CWindow installs a handler that forwards the View > Meshes visibility set to the mesh overlay.
+    void setMeshVisibilityHandler(std::function<void(const std::vector<std::string>&)> handler)
+    {
+        _onMeshVisibility = std::move(handler);
+    }
     bool openVolpkgAt(const QString& path,
                       bool interactive = true,
                       QString* errorMessage = nullptr);
@@ -129,6 +136,7 @@ signals:
 private:
     // The Stores menu: the stores beside the project and the store each kind uses.
     void refreshStoresMenu();
+    void refreshMeshesMenu();
     QStringList loadRecentPaths() const;
     void saveRecentPaths(const QStringList& paths);
     void ensureRecentActions();
@@ -183,6 +191,9 @@ private:
     QMenu* _helpMenu{nullptr};
     QMenu* _recentMenu{nullptr};
     QMenu* _storesMenu{nullptr};
+    QMenu* _meshesMenu{nullptr};
+    std::set<std::string> _visibleMeshes;
+    std::function<void(const std::vector<std::string>&)> _onMeshVisibility;
 
     QAction* _newProjectAct{nullptr};
     QAction* _saveProjectAsAct{nullptr};

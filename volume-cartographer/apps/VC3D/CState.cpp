@@ -437,7 +437,13 @@ void CState::setStoreSelection(const std::string& kind, const std::string& id)
     if (_objectStoreOwner) { _objectStoreOwner->setStoreSelection(kind, id); return; }
     if (!_vpkg) throw std::runtime_error("Open a project first");
     auto data = _vpkg->document().data();
-    if (!data["selections"].contains(kind)) throw std::invalid_argument("Unknown object kind");
+    if (!data["selections"].contains(kind)) {
+        // A kind registered after this project file was written is absent from its
+        // selections map; accept it when routable and add it on save (back-compat).
+        const auto& routable = routableKinds();
+        if (std::find(routable.begin(), routable.end(), kind) == routable.end())
+            throw std::invalid_argument("Unknown object kind");
+    }
     const nlohmann::json selected = id.empty() ? nlohmann::json(nullptr) : nlohmann::json(id);
     if (data["selections"][kind] == selected) return;
     if (prepareStoreSwitch && !prepareStoreSwitch()) throw std::runtime_error("Store switch cancelled: pending edits could not be saved");
