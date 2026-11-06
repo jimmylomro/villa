@@ -7,9 +7,15 @@
 #include "fibers3d/Fiber3DSliceControls.hpp"
 #include "fibers3d/Fiber3DSurfaceControls.hpp"
 #include "vc/core/types/Volume.hpp"
+#include <QAction>
+#include <QActionGroup>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QHideEvent>
+#include <QMenu>
+#include <QSignalBlocker>
+#include <QSlider>
+#include <QWidgetAction>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
@@ -49,6 +55,68 @@ Scene3DPanel::Scene3DPanel(CState* state, ViewerManager* viewers, QWidget* paren
     umbilicusButton_->setCheckable(true);
     umbilicusButton_->setEnabled(false);   // enabled only once a View > Umbilicus selection exists
     umbilicusButton_->setToolTip(tr("Show the selected umbilicus (View ▸ Umbilicus) as a line here in 3D."));
+    auto* animationButton = button(tr("Animation"), "scene3DAnimation");
+    animationButton->setPopupMode(QToolButton::InstantPopup);
+    animationButton->setToolTip(tr("Animate the 3D camera (works in every mode): spin, or walk along the umbilicus."));
+    auto* animationMenu = new QMenu(animationButton);
+    auto* animationGroup = new QActionGroup(animationMenu);
+    animationGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);   // one at a time, or none
+    spinAction_ = animationMenu->addAction(tr("Spin"));
+    spinAction_->setCheckable(true);
+    spinAction_->setToolTip(tr("Turntable spin. Drag/pan/zoom still work; the spin resumes when released."));
+    animationGroup->addAction(spinAction_);
+    walkAction_ = animationMenu->addAction(tr("Walk umbilicus"));
+    walkAction_->setCheckable(true);
+    walkAction_->setEnabled(false);   // needs a selected umbilicus (View ▸ Umbilicus)
+    walkAction_->setToolTip(tr("Glide the camera along the umbilicus at the current zoom; any manual move ends it."));
+    animationGroup->addAction(walkAction_);
+    connect(spinAction_, &QAction::toggled, this, [this](bool on) {
+        canvas_->setAnimation(on ? Scene3DCanvas::Animation::Spin : Scene3DCanvas::Animation::None);
+    });
+    connect(walkAction_, &QAction::toggled, this, [this](bool on) {
+        canvas_->setAnimation(on ? Scene3DCanvas::Animation::UmbilicusWalk : Scene3DCanvas::Animation::None);
+    });
+    animationMenu->addSeparator();
+    // A labelled slider embedded in the menu (QWidgetAction keeps the menu open while dragging it).
+    const auto addSlider = [&](const QString& title, int maximum, int initial) {
+        auto* row = new QWidget(animationMenu);
+        auto* box = new QVBoxLayout(row);
+        box->setContentsMargins(12, 2, 12, 2);
+        box->setSpacing(1);
+        box->addWidget(new QLabel(title, row));
+        auto* slider = new QSlider(Qt::Horizontal, row);
+        slider->setRange(0, maximum);
+        slider->setValue(initial);
+        box->addWidget(slider);
+        auto* action = new QWidgetAction(animationMenu);
+        action->setDefaultWidget(row);
+        animationMenu->addAction(action);
+        return slider;
+    };
+    // Shared speed: 0..2 so the top of the slider (squared → 4) spins absurdly fast. Default 0.5 = quarter.
+    auto* speedSlider = addSlider(tr("Speed"), 200, 50);
+    connect(speedSlider, &QSlider::valueChanged, this, [this](int v) { canvas_->setAnimationSpeed(v / 100.0); });
+    auto* axisMenu = animationMenu->addMenu(tr("Spin axis"));
+    auto* axisGroup = new QActionGroup(axisMenu);
+    const auto addAxis = [&](const QString& label, Scene3DCanvas::SpinAxis axis, bool on) {
+        auto* act = axisMenu->addAction(label);
+        act->setCheckable(true);
+        act->setChecked(on);
+        axisGroup->addAction(act);
+        connect(act, &QAction::triggered, this, [this, axis] { canvas_->setSpinAxis(axis); });
+    };
+    addAxis(tr("Z (turntable)"), Scene3DCanvas::SpinAxis::Z, true);   // current/default
+    addAxis(tr("X (tumble)"), Scene3DCanvas::SpinAxis::X, false);
+    addAxis(tr("Y (roll)"), Scene3DCanvas::SpinAxis::Y, false);
+    animationMenu->addSeparator();
+    auto* facing = animationMenu->addAction(tr("Walk: face spline direction"));
+    facing->setCheckable(true);
+    facing->setChecked(true);   // default on: the camera rides the spline looking along it
+    facing->setToolTip(tr("On: the camera flies along the umbilicus looking forward. Off: watch it from the current view."));
+    connect(facing, &QAction::toggled, this, [this](bool on) { canvas_->setWalkFacing(on); });
+    auto* smoothing = addSlider(tr("Walk: umbilicus smoothing"), 100, 50);   // 0 = raw, 100 = heaviest
+    connect(smoothing, &QSlider::valueChanged, this, [this](int v) { canvas_->setWalkSmoothing(v / 100.0); });
+    animationButton->setMenu(animationMenu);
     toolbar->addStretch();
     auto* detach = button(tr("Detach"), "scene3DDetach");
     layout->addLayout(toolbar);
@@ -76,6 +144,15 @@ Scene3DPanel::Scene3DPanel(CState* state, ViewerManager* viewers, QWidget* paren
     connect(umbilicusButton_, &QToolButton::toggled, this, [this](bool on) {
         canvas_->setUmbilicus(umbilicusPoints_);
         canvas_->setUmbilicusVisible(on && !umbilicusPoints_.empty());
+    });
+    // Keep the menu checks in sync with the canvas, including when a manual gesture auto-cancels the walk.
+    connect(canvas_, &Scene3DCanvas::animationChanged, this, [this](Scene3DCanvas::Animation a) {
+        QSignalBlocker spinBlock(spinAction_), walkBlock(walkAction_);
+        spinAction_->setChecked(a == Scene3DCanvas::Animation::Spin);
+        walkAction_->setChecked(a == Scene3DCanvas::Animation::UmbilicusWalk);
+    });
+    connect(canvas_, &Scene3DCanvas::umbilicusPathAvailabilityChanged, this, [this](bool available) {
+        walkAction_->setEnabled(available);
     });
     slices_ = new fibers3d::Fiber3DSliceControls(state, viewers, canvas_, ct, this, QStringLiteral("scene3d"));
     slices_->enableXYPositionControl();

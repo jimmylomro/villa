@@ -49,6 +49,24 @@ public:
     // The current volume's umbilicus polyline (volume voxels, x,y,z), drawn as a line when visible.
     void setUmbilicus(const std::vector<std::array<double, 3>>& points);
     void setUmbilicusVisible(bool visible);
+    // 3D-view camera animations, available in every display mode (CT / surfaces / meshes).
+    //  - Spin: turntable yaw; manual drag/pan/zoom still work and the spin resumes once released.
+    //  - UmbilicusWalk: glides the camera along a heavily-smoothed umbilicus at the current zoom; at each
+    //    end it pulls out to frame the whole volume, then returns and walks back the other way. Any manual
+    //    pan/drag/zoom cancels it (it is not resumed). Requires a selected umbilicus.
+    enum class Animation { None, Spin, UmbilicusWalk };
+    void setAnimation(Animation animation);
+    Animation animation() const;
+    // Shared speed for both animations, normalised [0,1] (mapped to a sensible range per animation).
+    void setAnimationSpeed(double normalized);
+    // Spin axis, fixed in screen space: Z = view-up turntable (the default), X = horizontal tumble, Y = roll.
+    enum class SpinAxis { X, Y, Z };
+    void setSpinAxis(SpinAxis axis);
+    // Umbilicus walk: fly-through (look along the tangent and ride the spline) vs. fixed-orientation pan.
+    void setWalkFacing(bool facing);
+    // Umbilicus walk: how hard to smooth the spline, normalised [0,1] (0 = raw, ~0.8 = the heavy default feel).
+    void setWalkSmoothing(double normalized);
+    bool hasUmbilicusPath() const;
     void setSurfaceOpacity(float opacity);
     void setSurfaceVisible(bool visible);
     bool isSurfaceVisible() const;
@@ -65,6 +83,10 @@ signals:
     void surfaceTexturedChanged(bool enabled);
     // Emitted when the shared CT texture level combo changes, so the mesh source can re-bake.
     void surfaceTextureLevelChanged(int level);
+    // Emitted when the active animation changes, including when a manual gesture auto-cancels the walk.
+    void animationChanged(Animation animation);
+    // Emitted when a selected umbilicus appears/disappears, so the walk control can enable/disable itself.
+    void umbilicusPathAvailabilityChanged(bool available);
     void viewScaleChanged();
     void positionClicked(QPointF position, bool context, QPoint globalPosition);
     void emptyContextRequested(QPoint globalPosition);
@@ -86,6 +108,8 @@ protected:
     void drawSurface();
     void drawCTSlices();
     void drawUmbilicus();
+    void stepAnimation();
+    void startWalk();
     GLuint uploadCTTexture(const ct::Tile& tile);
     void fitBounds(const Bounds&);
 

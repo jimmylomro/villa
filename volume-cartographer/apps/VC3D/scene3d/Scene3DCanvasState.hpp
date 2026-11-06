@@ -4,6 +4,7 @@
 #include "fibers3d/Fiber3DSurfaceRenderer.hpp"
 #include "fibers3d/Fiber3DVolumeRenderer.hpp"
 #include <QTimer>
+#include <QElapsedTimer>
 #include <unordered_map>
 #include <cmath>
 #include <algorithm>
@@ -48,6 +49,25 @@ struct Scene3DCanvas::State {
     float windowLow = 0, windowHigh = 255;
     QString ctError;
     QTimer refine;
+    // Camera animations (spin / umbilicus-walk). Driven by animTimer at ~60 Hz while active.
+    Animation anim = Animation::None;
+    QTimer animTimer;
+    QElapsedTimer animClock;
+    double animSpeed = 0.5;     // shared, normalised [0,1]; mapped to deg/s (spin) and fraction/s (walk)
+    SpinAxis spinAxis = SpinAxis::Z;   // screen-space spin axis (Z = view-up turntable, the default)
+    bool walkFacing = true;     // fly-through: look along the tangent and ride the spline
+    double walkSmoothing = 0.5; // normalised [0,1]; 0 = raw umbilicus, 1 = heaviest
+    std::vector<Point> walkPath;   // smoothed umbilicus the camera glides along
+    double walkT = 0.0;            // [0,1] position along walkPath
+    int walkDir = 1;              // +1 / -1 travel direction
+    enum class WalkPhase { Travel, ToOverview, Overview, ToPath } walkPhase = WalkPhase::Travel;
+    double walkPhaseT = 0.0;       // [0,1] progress within the current non-Travel phase
+    double walkStartScale = 100.0; // the zoom held during travel (captured when the walk starts)
+    double overviewScale = 100.0;  // whole-volume framing used at each end
+    Point walkEndpoint{}, overviewTarget{};
+    Point walkResumeTarget{};      // where Travel resumes after the overview (for a pop-free return)
+    QQuaternion walkResumeRot;
+    bool walkResumeHasRot = false;
     bool interactive = false;
     Point origin{}, target{};
     QQuaternion rotation = QQuaternion::fromEulerAngles(-25.0f, 30.0f, 0.0f);

@@ -19,6 +19,58 @@ bool finite(const Point& p)
 {
     return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
 }
+Point lerpPoint(const Point& a, const Point& b, double t)
+{
+    return {a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
+}
+double smoothstep(double t)
+{
+    t = std::clamp(t, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+// Smooth the raw umbilicus so the camera glide is cinematic, not jittery: two box-filter passes
+// (≈ Gaussian) with a half-window scaled by the smoothing amount, done with a running sum so it stays O(N).
+std::vector<Point> heavySmooth(const std::vector<Point>& in, int half)
+{
+    const int n = int(in.size());
+    if (n < 3 || half < 1)
+        return in;
+    half = std::min(half, n - 1);
+    std::vector<Point> a = in, b(n);
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int k = 0; k < 3; ++k) {
+            double sum = 0.0;
+            for (int i = 0; i <= std::min(half, n - 1); ++i)
+                sum += a[i][k];
+            int lo = 0, hi = std::min(half, n - 1);
+            for (int i = 0; i < n; ++i) {
+                b[i][k] = sum / (hi - lo + 1);
+                const int nlo = std::max(0, i + 1 - half), nhi = std::min(n - 1, i + 1 + half);
+                for (int j = hi + 1; j <= nhi; ++j) sum += a[j][k];
+                for (int j = lo; j < nlo; ++j) sum -= a[j][k];
+                lo = nlo;
+                hi = nhi;
+            }
+        }
+        a.swap(b);
+    }
+    return a;
+}
+// Sample a polyline at normalised arc position t in [0,1] (uniform index spacing: umbilicus points are
+// one-per-slice, so index ≈ arc length).
+Point samplePath(const std::vector<Point>& p, double t)
+{
+    const int n = int(p.size());
+    if (n == 0)
+        return {};
+    if (n == 1)
+        return p[0];
+    const double f = std::clamp(t, 0.0, 1.0) * (n - 1);
+    int i = int(std::floor(f));
+    if (i >= n - 1)
+        return p[n - 1];
+    return lerpPoint(p[i], p[i + 1], f - i);
+}
 }
 Scene3DCanvas::Scene3DCanvas(QWidget* parent) : QOpenGLWidget(parent), v(std::make_unique<State>())
 {
@@ -37,6 +89,8 @@ Scene3DCanvas::Scene3DCanvas(QWidget* parent) : QOpenGLWidget(parent), v(std::ma
         v->interactive = false;
         update();
     });
+    v->animTimer.setInterval(16);   // ~60 Hz
+    connect(&v->animTimer, &QTimer::timeout, this, &Scene3DCanvas::stepAnimation);
 }
 Scene3DCanvas::~Scene3DCanvas()
 {
@@ -73,8 +127,223 @@ void Scene3DCanvas::cleanupGL()
 }
 void Scene3DCanvas::setUmbilicus(const std::vector<std::array<double, 3>>& points)
 {
+    const bool had = hasUmbilicusPath();
     v->umbilicus.assign(points.begin(), points.end());
     v->umbilicusDirty = true;
+    const bool has = hasUmbilicusPath();
+    if (had != has)
+        emit umbilicusPathAvailabilityChanged(has);
+    if (!has && v->anim == Animation::UmbilicusWalk)
+        setAnimation(Animation::None);
+    update();
+}
+bool Scene3DCanvas::hasUmbilicusPath() const
+{
+    return v->umbilicus.size() >= 2;
+}
+Scene3DCanvas::Animation Scene3DCanvas::animation() const
+{
+    return v->anim;
+}
+void Scene3DCanvas::setAnimationSpeed(double normalized)
+{
+    v->animSpeed = std::clamp(normalized, 0.0, 2.0);   // >1 (squared) spins very fast; 2 is for fun
+}
+void Scene3DCanvas::setSpinAxis(SpinAxis axis)
+{
+    v->spinAxis = axis;
+}
+void Scene3DCanvas::setWalkFacing(bool facing)
+{
+    v->walkFacing = facing;
+}
+void Scene3DCanvas::setWalkSmoothing(double normalized)
+{
+    v->walkSmoothing = std::clamp(normalized, 0.0, 1.0);
+    if (v->anim == Animation::UmbilicusWalk) {   // live update while walking
+        const int half = int(std::lround(v->walkSmoothing * v->umbilicus.size() / 6.0));
+        v->walkPath = heavySmooth(v->umbilicus, half);
+    }
+}
+void Scene3DCanvas::setAnimation(Animation animation)
+{
+    if (animation == Animation::UmbilicusWalk && !hasUmbilicusPath())
+        animation = Animation::None;
+    if (v->anim == animation)
+        return;
+    v->anim = animation;
+    if (animation == Animation::UmbilicusWalk)
+        startWalk();
+    if (animation == Animation::None) {
+        v->animTimer.stop();
+        v->interactive = false;   // let the next frame render at full quality
+        update();
+    } else {
+        v->animClock.restart();
+        if (!v->animTimer.isActive())
+            v->animTimer.start();
+    }
+    emit animationChanged(v->anim);
+}
+void Scene3DCanvas::startWalk()
+{
+    // smoothing 0 -> raw; ~0.8 -> the heavy default feel (half-window ≈ N/12).
+    const int half = int(std::lround(v->walkSmoothing * v->umbilicus.size() / 6.0));
+    v->walkPath = heavySmooth(v->umbilicus, half);
+    v->walkT = 0.0;
+    v->walkDir = 1;
+    v->walkPhase = State::WalkPhase::Travel;
+    v->walkPhaseT = 0.0;
+    v->walkStartScale = v->scale;   // keep the zoom the user already had
+    // Overview = frame the whole content (slices + mesh + volume + umbilicus), like Fit all.
+    const double inf = std::numeric_limits<double>::infinity();
+    Bounds bounds{{inf, inf, inf}, {-inf, -inf, -inf}};
+    auto expand = [&](const Point& p) {
+        for (int k = 0; k < 3; ++k) {
+            bounds.lower[k] = std::min(bounds.lower[k], p[k]);
+            bounds.upper[k] = std::max(bounds.upper[k], p[k]);
+        }
+    };
+    for (const auto& image : v->slices)
+        for (const auto& p : slices::corners(*image))
+            expand(p);
+    if (v->surfaceVisible && v->surfaceMesh) {
+        expand(v->surfaceMesh->bounds.lower);
+        expand(v->surfaceMesh->bounds.upper);
+    }
+    if (v->ctVolume) {
+        expand(v->ctVolume->bounds.lower);
+        expand(v->ctVolume->bounds.upper);
+    }
+    for (const auto& p : v->umbilicus)
+        expand(p);
+    if (finite(bounds.lower) && finite(bounds.upper)) {
+        for (int k = 0; k < 3; ++k)
+            v->overviewTarget[k] = (bounds.lower[k] + bounds.upper[k]) * 0.5;
+        const double aspect = double(std::max(1, width())) / std::max(1, height());
+        v->overviewScale = std::max(1.0, distance(bounds.lower, bounds.upper) * 0.6) / std::min(1.0, aspect);
+    } else {
+        v->overviewTarget = v->target;
+        v->overviewScale = v->walkStartScale;
+    }
+}
+void Scene3DCanvas::stepAnimation()
+{
+    if (v->anim == Animation::None) {
+        v->animTimer.stop();
+        return;
+    }
+    double dt = v->animClock.restart() / 1000.0;
+    dt = std::clamp(dt, 0.0, 0.1);   // guard against stalls / first tick
+    const double s = v->animSpeed * v->animSpeed;   // quadratic: gentle at the low/mid slider, fast only near the top
+    const double spinDegPerSec = 15.0 + s * (240.0 - 15.0);     // shared speed → turntable yaw
+    const double walkFracPerSec = 0.02 + s * (0.25 - 0.02);     // shared speed → umbilicus pace
+    if (v->anim == Animation::Spin) {
+        // Pause the auto-yaw only while a button is actively held, so a manual drag stays clean; it resumes
+        // on release. Panning/zooming compose with the spin.
+        if (v->pressed == Qt::NoButton) {
+            // Pre-multiply keeps the axis fixed in screen space. Z = view-up (turntable), X = view-right
+            // (tumble), Y = view-depth (roll).
+            const QVector3D axis = v->spinAxis == SpinAxis::X   ? QVector3D(1, 0, 0)
+                                   : v->spinAxis == SpinAxis::Y ? QVector3D(0, 0, 1)
+                                                                : QVector3D(0, 1, 0);
+            v->rotation = QQuaternion::fromAxisAndAngle(axis, float(spinDegPerSec * dt)) * v->rotation;
+            v->rotation.normalize();
+        }
+    } else {   // UmbilicusWalk
+        constexpr double overviewDur = 1.4, holdDur = 0.9;
+        using WP = State::WalkPhase;
+        // The camera pose for a given position/direction along the path. With facing on, the eye rides the
+        // spline itself: we look along the tangent and push the look-at target ahead by the eye distance, so
+        // the eye lands exactly on the spline point (a first-person fly-through). With facing off, the target
+        // is the spline point and the user's fixed orientation is kept (watching the spline from outside).
+        auto pose = [&](double t, int dir, Point& outTarget, QQuaternion& outRot, bool& hasRot) {
+            const Point p = samplePath(v->walkPath, t);
+            outTarget = p;
+            hasRot = false;
+            if (!v->walkFacing)
+                return;
+            const double eps = 0.01;
+            const auto ahead = samplePath(v->walkPath, t + eps);
+            const auto behind = samplePath(v->walkPath, t - eps);
+            QVector3D forward(float((ahead[0] - behind[0]) * dir), float((ahead[1] - behind[1]) * dir),
+                              float((ahead[2] - behind[2]) * dir));
+            if (forward.lengthSquared() <= 1e-9f)
+                return;
+            forward.normalize();
+            QVector3D up(0, 1, 0);
+            if (std::abs(QVector3D::dotProduct(forward, up)) > 0.95f)
+                up = QVector3D(1, 0, 0);
+            // fromDirection() takes the object's +Z (camera "backward") axis, so pass -forward to look ALONG
+            // the travel direction; conjugate turns the object orientation into the world->view rotation.
+            outRot = QQuaternion::fromDirection(-forward, up).conjugated();
+            hasRot = true;
+            const double eyeDist = v->perspective ? v->scale / std::tan(0.39269908169872415481) : 0.0;
+            outTarget = {p[0] + forward.x() * eyeDist, p[1] + forward.y() * eyeDist, p[2] + forward.z() * eyeDist};
+        };
+        switch (v->walkPhase) {
+        case WP::Travel: {
+            v->walkT = std::clamp(v->walkT + v->walkDir * walkFracPerSec * dt, 0.0, 1.0);
+            v->scale = v->walkStartScale;
+            Point tgt;
+            QQuaternion rot;
+            bool hasRot = false;
+            pose(v->walkT, v->walkDir, tgt, rot, hasRot);
+            v->target = tgt;
+            if (hasRot) {
+                v->rotation = rot;
+                v->rotation.normalize();
+            }
+            if (v->walkT >= 1.0 || v->walkT <= 0.0) {
+                v->walkEndpoint = v->target;   // capture the actual (possibly eye-offset) pose, no pop
+                v->walkPhase = WP::ToOverview;
+                v->walkPhaseT = 0.0;
+            }
+            break;
+        }
+        case WP::ToOverview: {
+            v->walkPhaseT += dt / overviewDur;
+            const double e = smoothstep(v->walkPhaseT);
+            v->target = lerpPoint(v->walkEndpoint, v->overviewTarget, e);
+            v->scale = v->walkStartScale + (v->overviewScale - v->walkStartScale) * e;
+            if (v->walkPhaseT >= 1.0) {
+                v->walkPhase = WP::Overview;
+                v->walkPhaseT = 0.0;
+            }
+            break;
+        }
+        case WP::Overview: {
+            v->walkPhaseT += dt / holdDur;
+            v->target = v->overviewTarget;
+            v->scale = v->overviewScale;
+            if (v->walkPhaseT >= 1.0) {
+                v->walkDir = -v->walkDir;   // walk back the other way
+                // Pre-compute where Travel will resume so the return glides there without a pop.
+                pose(v->walkT, v->walkDir, v->walkResumeTarget, v->walkResumeRot, v->walkResumeHasRot);
+                v->walkPhase = WP::ToPath;
+                v->walkPhaseT = 0.0;
+            }
+            break;
+        }
+        case WP::ToPath: {
+            v->walkPhaseT += dt / overviewDur;
+            const double e = smoothstep(v->walkPhaseT);
+            v->target = lerpPoint(v->overviewTarget, v->walkResumeTarget, e);
+            v->scale = v->overviewScale + (v->walkStartScale - v->overviewScale) * e;   // back to the start zoom
+            if (v->walkResumeHasRot) {
+                v->rotation = QQuaternion::slerp(v->rotation, v->walkResumeRot, float(e));   // aligned by Travel
+                v->rotation.normalize();
+            }
+            if (v->walkPhaseT >= 1.0) {
+                v->walkPhase = WP::Travel;
+                v->walkPhaseT = 0.0;
+            }
+            break;
+        }
+        }
+        emit viewScaleChanged();
+    }
+    v->interactive = true;   // keep motion smooth (cheaper raymarch); a final sharp frame renders on stop
     update();
 }
 void Scene3DCanvas::setUmbilicusVisible(bool visible)
@@ -593,6 +862,8 @@ void Scene3DCanvas::mouseMoveEvent(QMouseEvent* event)
     if (!v->dragging && (event->position() - v->pressPosition).manhattanLength() < QApplication::startDragDistance())
         return;
     v->dragging = true;
+    if (v->anim == Animation::UmbilicusWalk)
+        setAnimation(Animation::None);   // a manual drag ends the walk; it is not resumed
     v->interactive = true;
     v->refine.start();
     const QPointF delta = event->position() - v->previousPosition;
@@ -646,6 +917,10 @@ void Scene3DCanvas::wheelEvent(QWheelEvent* event)
     v->refine.start();
     const double steps = !event->pixelDelta().isNull() ? event->pixelDelta().y() / 120.0 : event->angleDelta().y() / 120.0;
     v->scale = std::clamp(v->scale * std::exp(-steps * 0.15), 0.01, 1.0e9);
+    // Zooming does NOT cancel the umbilicus walk (so you can zoom into the fly-through); carry the new zoom
+    // so travel holds it and the end-overview returns to it.
+    if (v->anim == Animation::UmbilicusWalk)
+        v->walkStartScale = v->scale;
     emit viewScaleChanged();
     update();
     event->accept();

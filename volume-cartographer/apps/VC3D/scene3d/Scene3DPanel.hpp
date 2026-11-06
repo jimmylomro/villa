@@ -8,6 +8,7 @@ class CState;
 class ViewerManager;
 class QComboBox;
 class QToolButton;
+class QAction;
 namespace vc3d::fibers3d {
 class Fiber3DSliceControls;
 class Fiber3DSurfaceControls;
@@ -45,6 +46,8 @@ private:
     Scene3DMeshSource* meshSource_;
     QComboBox* displayMode_;
     QToolButton* umbilicusButton_ = nullptr;
+    QAction* spinAction_ = nullptr;
+    QAction* walkAction_ = nullptr;   // umbilicus walk; enabled only while an umbilicus is selected
     std::vector<std::array<double, 3>> umbilicusPoints_;   // the globally-selected umbilicus (or empty)
     bool savedCT_ = true;
 };
