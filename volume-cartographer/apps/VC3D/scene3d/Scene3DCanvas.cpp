@@ -8,6 +8,7 @@
 #include <QSurfaceFormat>
 #include <QWheelEvent>
 #include <QVector2D>
+#include <QVector4D>
 #include <limits>
 
 namespace vc3d::scene3d
@@ -62,8 +63,73 @@ void Scene3DCanvas::cleanupGL()
     if (v->ctVao)
         glDeleteVertexArrays(1, &v->ctVao);
     v->ctVao = 0;
+    if (v->umbilicusBuffer)
+        glDeleteBuffers(1, &v->umbilicusBuffer);
+    v->umbilicusBuffer = 0;
+    v->umbilicusDirty = true;
+    v->lineProgram.reset();
     v->glReady = false;
     doneCurrent();
+}
+void Scene3DCanvas::setUmbilicus(const std::vector<std::array<double, 3>>& points)
+{
+    v->umbilicus.assign(points.begin(), points.end());
+    v->umbilicusDirty = true;
+    update();
+}
+void Scene3DCanvas::setUmbilicusVisible(bool visible)
+{
+    v->umbilicusVisible = visible;
+    update();
+}
+void Scene3DCanvas::drawUmbilicus()
+{
+    if (!v->umbilicusVisible || v->umbilicus.size() < 2 || !v->lineProgram || !v->lineProgram->isLinked())
+        return;
+    if (v->umbilicusDirty) {
+        if (v->umbilicusBuffer)
+            glDeleteBuffers(1, &v->umbilicusBuffer);
+        v->umbilicusBuffer = 0;
+        std::vector<float> data;
+        data.reserve(v->umbilicus.size() * 3);
+        for (const auto& p : v->umbilicus) {
+            const auto r = relative(p, v->origin);
+            data.push_back(r.x());
+            data.push_back(r.y());
+            data.push_back(r.z());
+        }
+        glGenBuffers(1, &v->umbilicusBuffer);
+        glBindBuffer(GL_ARRAY_BUFFER, v->umbilicusBuffer);
+        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(data.size() * sizeof(float)), data.data(), GL_STATIC_DRAW);
+        v->umbilicusCount = int(v->umbilicus.size());
+        v->umbilicusDirty = false;
+    }
+    if (!v->umbilicusBuffer) {              // buffer allocation failed; draw nothing, leave GL clean
+        while (glGetError() != GL_NO_ERROR) {}
+        return;
+    }
+    glBindVertexArray(v->ctVao);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    v->lineProgram->bind();
+    v->lineProgram->setUniformValue("mvp", v->matrix(width(), height()));
+    v->lineProgram->setUniformValue("lineColor", QVector4D(1.f, 0.86f, 0.16f, 1.f));   // yellow
+    glBindBuffer(GL_ARRAY_BUFFER, v->umbilicusBuffer);
+    glEnableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);   // the shared VAO may still have the slice uv array enabled
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glVertexAttribDivisor(0, 0);
+    // NO glLineWidth: values != 1.0 raise GL_INVALID_VALUE on a 3.3 core profile, and that stale error
+    // would then be misread by the slice upload and the surface renderer (they both check glGetError()).
+    glDrawArrays(GL_LINE_STRIP, 0, v->umbilicusCount);
+    glDisableVertexAttribArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    v->lineProgram->release();
+    glBindVertexArray(0);
+    // Belt and braces: never let any GL error from this path leak to the next renderer's error check.
+    while (glGetError() != GL_NO_ERROR) {}
 }
 int Scene3DCanvas::maximumVolumeTextureEdge() const
 {
@@ -110,6 +176,21 @@ void Scene3DCanvas::initializeGL()
     )glsl") ||
         !v->ctProgram->link())
         v->ctError = tr("Cannot initialize CT display: %1").arg(v->ctProgram->log());
+    v->lineProgram = std::make_unique<QOpenGLShaderProgram>();
+    v->lineProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, R"glsl(
+        #version 330 core
+        layout(location=0) in vec3 position;
+        uniform mat4 mvp;
+        void main() { gl_Position = mvp * vec4(position,1); }
+    )glsl");
+    v->lineProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, R"glsl(
+        #version 330 core
+        uniform vec4 lineColor;
+        out vec4 color;
+        void main() { color = lineColor; }
+    )glsl");
+    v->lineProgram->link();
+    while (glGetError() != GL_NO_ERROR) {}   // the line program/buffer setup must leave GL clean
 }
 void Scene3DCanvas::beginFrame()
 {
@@ -133,7 +214,10 @@ void Scene3DCanvas::drawSurface()
     if (v->glReady && (v->surfaceMesh || v->surfaceRenderer)) {
         if (!v->surfaceRenderer)
             v->surfaceRenderer = std::make_unique<fibers3d::Fiber3DSurfaceRenderer>();
-        v->surfaceUploading = v->surfaceRenderer->draw(v->surfaceVisible ? v->surfaceMesh : nullptr, matrix, v->origin, v->rotation, v->surfaceOpacity, v->surfaceTextured, v->windowLow, v->windowHigh);
+        const slices::Slab* slab = nullptr;
+        if (v->surfaceVolumeSample && v->ctVolume && !v->ctVolume->images.empty() && v->ctVolume->images.front()->slab)
+            slab = &*v->ctVolume->images.front()->slab;
+        v->surfaceUploading = v->surfaceRenderer->draw(v->surfaceVisible ? v->surfaceMesh : nullptr, matrix, v->origin, v->rotation, v->surfaceOpacity, v->surfaceTextured, v->windowLow, v->windowHigh, v->surfaceUseVertexColor, slab, slab != nullptr);
         if (v->surfaceUploading)
             update();
     }
@@ -144,6 +228,8 @@ void Scene3DCanvas::paintGL()
     drawSurface();
     if (v->glReady)
         drawCTSlices();
+    if (v->glReady)
+        drawUmbilicus();
     QPainter painter(this);
     painter.setPen(Qt::white);
     QString error = v->ctError;
@@ -286,13 +372,16 @@ void Scene3DCanvas::drawCTSlices()
         v->sliceTree = volumetric ? nullptr : slices::partition(v->slices);
         v->slicesDirty = false;
     }
-    if ((volumetric || v->ctVolume) && !v->volumeRenderer)
+    // In "Meshes + slices" mode the ctVolume is only the slab the mesh samples per-fragment -- do NOT also
+    // raymarch it as a translucent cloud over the faces.
+    const bool raymarchCt = v->ctVolume && !v->surfaceVolumeSample;
+    if ((volumetric || raymarchCt) && !v->volumeRenderer)
         v->volumeRenderer = std::make_unique<fibers3d::Fiber3DVolumeRenderer>();
     if (v->volumeRenderer) {
         const auto ratio = devicePixelRatioF();
         auto transfer = v->sliceTransfer;
         int raySamples = 512;
-        if (v->ctVolume) {
+        if (raymarchCt) {
             const auto& slab = *v->ctVolume->images.front()->slab;
             raySamples = 2 * std::min(2048, std::max({slab.width, slab.height, slab.depth}));
             auto& p = transfer[0];
@@ -306,7 +395,7 @@ void Scene3DCanvas::drawCTSlices()
             p.options.alphaCutoff = 1;
         }
         v->volumeUploading = v->volumeRenderer
-                ->draw(v->ctVolume ? v->ctVolume->images : (volumetric ? v->slices : slices::Images{}), transfer, v->matrix(width(), height()), v->origin, defaultFramebufferObject(), int(width() * ratio), int(height() * ratio), v->windowLow, v->windowHigh, v->ctVolume ? (v->surfaceVisible ? v->surfaceOpacity : 0.f) : v->sliceOpacity, v->interactive, raySamples);
+                ->draw(raymarchCt ? v->ctVolume->images : (volumetric ? v->slices : slices::Images{}), transfer, v->matrix(width(), height()), v->origin, defaultFramebufferObject(), int(width() * ratio), int(height() * ratio), v->windowLow, v->windowHigh, raymarchCt ? (v->surfaceVisible ? v->surfaceOpacity : 0.f) : v->sliceOpacity, v->interactive, raySamples);
         if (v->volumeUploading)
             update();
     }
@@ -422,6 +511,32 @@ bool Scene3DCanvas::isSurfaceMeshReady() const
 void Scene3DCanvas::setSurfaceTextured(bool enabled)
 {
     v->surfaceTextured = enabled;
+    emit surfaceTexturedChanged(enabled);
+    update();
+}
+bool Scene3DCanvas::isSurfaceTextured() const
+{
+    return v->surfaceTextured;
+}
+void Scene3DCanvas::setSurfaceTextureLevel(int level)
+{
+    if (v->surfaceTextureLevel == level)
+        return;
+    v->surfaceTextureLevel = level;
+    emit surfaceTextureLevelChanged(level);
+}
+int Scene3DCanvas::surfaceTextureLevel() const
+{
+    return v->surfaceTextureLevel;
+}
+void Scene3DCanvas::setSurfaceUseVertexColor(bool enabled)
+{
+    v->surfaceUseVertexColor = enabled;
+    update();
+}
+void Scene3DCanvas::setSurfaceVolumeSample(bool enabled)
+{
+    v->surfaceVolumeSample = enabled;
     update();
 }
 void Scene3DCanvas::setSurfaceOpacity(float opacity)

@@ -16,6 +16,9 @@ inline QVector3D relative(const Point& p, const Point& origin)
 }
 struct Scene3DCanvas::State {
     bool surfaceVisible = true, surfaceTextured = true;
+    bool surfaceUseVertexColor = false;   // mesh mode: shade per-vertex colour instead of the base colour
+    bool surfaceVolumeSample = false;     // mesh CT: sample the ctVolume slab per-fragment on the mesh
+    int surfaceTextureLevel = -1;         // shared CT texture OME-Zarr level (-1 = auto)
     std::shared_ptr<const surface::Mesh> surfaceMesh;
     std::unique_ptr<fibers3d::Fiber3DSurfaceRenderer> surfaceRenderer;
     float surfaceOpacity = .5f;
@@ -36,6 +39,12 @@ struct Scene3DCanvas::State {
     float sliceOpacity = .7f;
     std::unique_ptr<QOpenGLShaderProgram> ctProgram;
     GLuint ctVao = 0;
+    // Umbilicus (scroll axis) line overlay in the 3D view.
+    std::unique_ptr<QOpenGLShaderProgram> lineProgram;
+    GLuint umbilicusBuffer = 0;
+    int umbilicusCount = 0;
+    bool umbilicusVisible = false, umbilicusDirty = false;
+    std::vector<Point> umbilicus;
     float windowLow = 0, windowHigh = 255;
     QString ctError;
     QTimer refine;

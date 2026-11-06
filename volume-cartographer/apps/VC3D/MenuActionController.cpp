@@ -267,15 +267,18 @@ void MenuActionController::populateMenus(QMenuBar* menuBar)
     _editMenu = new QMenu(QObject::tr("&Edit"), qWindow);
 
     _viewMenu = new QMenu(QObject::tr("&View"), qWindow);
-    qWindow->populateDockToggleMenu(_viewMenu);
+    qWindow->populateDockToggleMenu(_viewMenu, /*includeFibers=*/false);
     _viewMenu->addAction(_mirrorCursorAct);
+    // Fibres, Meshes and Umbilicus grouped together right after "Sync cursor across views".
+    qWindow->populateFiberDockMenu(_viewMenu);
+    _meshesMenu = _viewMenu->addMenu(QObject::tr("Meshes"));
+    connect(_meshesMenu, &QMenu::aboutToShow, this, &MenuActionController::refreshMeshesMenu);
+    _umbilicusMenu = _viewMenu->addMenu(QObject::tr("Umbilicus"));
+    connect(_umbilicusMenu, &QMenu::aboutToShow, this, &MenuActionController::refreshUmbilicusMenu);
     _viewMenu->addSeparator();
     _viewMenu->addAction(_resetViewsAct);
     _viewMenu->addSeparator();
     _viewMenu->addAction(_showConsoleAct);
-    _viewMenu->addSeparator();
-    _meshesMenu = _viewMenu->addMenu(QObject::tr("Meshes"));
-    connect(_meshesMenu, &QMenu::aboutToShow, this, &MenuActionController::refreshMeshesMenu);
 
     _actionsMenu = new QMenu(QObject::tr("&Actions"), qWindow);
     _actionsMenu->addAction(_drawBBoxAct);
@@ -2115,6 +2118,9 @@ bool MenuActionController::requireProject(const QString& purpose)
 void MenuActionController::refreshMeshesMenu()
 {
     if (!_meshesMenu || !_window || !_window->_state) return;
+    delete _meshesGroup;   // its actions belong to the menu and are cleared below
+    _meshesGroup = new QActionGroup(this);
+    _meshesGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);   // single-select, or none
     _meshesMenu->clear();
     auto& state = *_window->_state;
     const auto session = state.objectStoreSession();
@@ -2140,12 +2146,65 @@ void MenuActionController::refreshMeshesMenu()
         auto* act = _meshesMenu->addAction(QString::fromStdString(name));
         act->setCheckable(true);
         act->setChecked(_visibleMeshes.count(uuid) != 0);
+        _meshesGroup->addAction(act);   // exclusive: at most one mesh shown (avoids baking several at once)
         const std::string id = uuid;
         connect(act, &QAction::toggled, this, [this, id](bool on) {
-            if (on) _visibleMeshes.insert(id);
-            else _visibleMeshes.erase(id);
+            // Single-select: turning one on replaces the set; the group's auto-uncheck of the previous one
+            // fires with the set already changed, so only the real selection reaches the handler.
+            if (on)
+                _visibleMeshes = {id};
+            else if (_visibleMeshes.count(id))
+                _visibleMeshes.clear();
+            else
+                return;
             if (_onMeshVisibility)
                 _onMeshVisibility(std::vector<std::string>(_visibleMeshes.begin(), _visibleMeshes.end()));
+        });
+    }
+}
+
+void MenuActionController::refreshUmbilicusMenu()
+{
+    if (!_umbilicusMenu || !_window || !_window->_state) return;
+    delete _umbilicusGroup;
+    _umbilicusGroup = new QActionGroup(this);
+    _umbilicusGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);   // one, or none
+    _umbilicusMenu->clear();
+    auto& state = *_window->_state;
+    const auto session = state.objectStoreSession();
+    const auto store = state.storeFor("umbilicus");
+    if (!session || !store) {
+        _umbilicusMenu->addAction(QObject::tr("(no umbilicus store routed)"))->setEnabled(false);
+        return;
+    }
+    std::vector<std::pair<std::string, std::string>> umbilici;   // (uuid, display name)
+    try {
+        session->read(*store, [&](const vc::objects::ObjectStore& db, const vc::objects::ReadTxn& txn,
+                                  const std::atomic_bool&) {
+            for (const auto& record : db.objectsByKind(txn, "umbilicus"))
+                umbilici.emplace_back(record.uuid, record.name.empty() ? record.uuid : record.name);
+        });
+    } catch (const std::exception&) {
+    }
+    if (umbilici.empty()) {
+        _umbilicusMenu->addAction(QObject::tr("(no umbilicus in this store)"))->setEnabled(false);
+        return;
+    }
+    for (const auto& [uuid, name] : umbilici) {
+        auto* act = _umbilicusMenu->addAction(QString::fromStdString(name));
+        act->setCheckable(true);
+        act->setChecked(_selectedUmbilicus == uuid);
+        _umbilicusGroup->addAction(act);   // single-select: the shown umbilicus, or none
+        const std::string id = uuid;
+        connect(act, &QAction::toggled, this, [this, id](bool on) {
+            if (on)
+                _selectedUmbilicus = id;
+            else if (_selectedUmbilicus == id)
+                _selectedUmbilicus.clear();
+            else
+                return;
+            if (_onUmbilicusVisibility)
+                _onUmbilicusVisibility(_selectedUmbilicus);   // empty = hide everywhere
         });
     }
 }

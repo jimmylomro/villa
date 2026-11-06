@@ -11,8 +11,10 @@ try {
     struct Channel { std::string uuid, name; std::filesystem::path image; };
     std::vector<Channel> channels;
     std::vector<std::string> tags;
+    std::vector<std::string> retire;
     vc::objects::SourceIngestOptions sourceOptions;
     bool showProgress = true;
+    std::string coordinateContext = "{}";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> std::string {
@@ -32,6 +34,11 @@ try {
             channels.push_back(std::move(channel));
         }
         else if (arg == "--tag") tags.push_back(next());
+        else if (arg == "--coordinates") {
+            const std::string vol = next(); const std::string scale = next();
+            coordinateContext = "{\"volume_uuid\":\"" + vol + "\",\"scale_factor\":" + scale + "}";
+        }
+        else if (arg == "--retire") retire.push_back(next());
         else if (arg == "--derive-uuids") sourceOptions.uuidNamespace = next();
         else if (arg == "--no-progress") showProgress = false;
         else if (arg == "--help" || arg == "-h") {
@@ -45,6 +52,8 @@ try {
                 "  --surface-channel UUID NAME TIFF\n"
                 "                            add or replace a channel of a stored surface\n"
                 "  --tag NAME                tag every imported object (repeatable)\n"
+                "  --coordinates UUID SCALE  bind imported geometry to volume UUID at SCALE stored-units/voxel\n"
+                "  --retire UUID             retire an object by UUID (any kind; its history is kept) (repeatable)\n"
                 "  --derive-uuids NAMESPACE  identities for sources without UUIDs (see below)\n"
                 "  --no-progress             suppress progress display\n"
                 "Fiber/collection sources commit atomically; tracks commit individually. Failures are reported and exit status is nonzero.\n"
@@ -58,8 +67,8 @@ try {
             return 0;
         } else throw std::runtime_error("unknown argument: " + arg);
     }
-    if (path.empty() || author.empty() || (sources.empty() && channels.empty()))
-        throw std::runtime_error("specify --db, --author and source or channel flags; see --help");
+    if (path.empty() || author.empty() || (sources.empty() && channels.empty() && retire.empty()))
+        throw std::runtime_error("specify --db, --author and source, channel or --retire flags; see --help");
     if (sourceOptions.uuidNamespace && !vc::objects::util::isUuid(*sourceOptions.uuidNamespace))
         throw std::runtime_error("--derive-uuids requires a UUID namespace");
     vc::objects::OpenOptions options; options.author = author;
@@ -74,7 +83,7 @@ try {
     };
     for (const auto& [kind, source] : sources) {
         vc::objects::util::TerminalProgress progress("Ingest " + kind, showProgress);
-        const auto report = vc::objects::ingestGeometrySource(db, kind, source, progress.callback(), "{}", tags, sourceOptions);
+        const auto report = vc::objects::ingestGeometrySource(db, kind, source, progress.callback(), coordinateContext, tags, sourceOptions);
         progress.finish(); print(report);
     }
     for (const auto& channel : channels) {
@@ -85,6 +94,25 @@ try {
             std::cout << channel.uuid << ": channel " << channel.name << " in geometry revision " << revision << '\n';
         } catch (const std::exception& error) {
             std::cerr << channel.uuid << ": " << error.what() << '\n';
+            failed = true;
+        }
+    }
+    for (const auto& uuid : retire) {
+        try {
+            std::string revision;
+            {
+                auto read = db.read();
+                const auto current = db.currentObjectRevision(read, uuid);
+                if (!current) throw std::runtime_error("no such object");
+                revision = current->uuid;
+            }
+            // Lifecycle writes are optimistic: pin the object's current head so a concurrent edit is caught.
+            auto txn = db.write(vc::objects::RevisionSelection{{uuid, revision}});
+            db.retireObject(txn, uuid);
+            txn.commit();
+            std::cout << uuid << ": retired\n";
+        } catch (const std::exception& error) {
+            std::cerr << uuid << ": " << error.what() << '\n';
             failed = true;
         }
     }

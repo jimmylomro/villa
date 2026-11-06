@@ -29,6 +29,8 @@ set(srcs
     scene3d/Scene3DCanvas.cpp
     scene3d/Scene3DPanel.cpp
     scene3d/Scene3DPanel.hpp
+    scene3d/Scene3DMeshSource.cpp
+    scene3d/Scene3DMeshSource.hpp
     scene3d/MemoryBudgetInput.hpp
     scene3d/VolumePreview.cpp
     scene3d/VolumePreview.hpp
@@ -190,6 +192,13 @@ set(srcs
     overlays/StoreSurfaceOverlayController.hpp
     overlays/StoreMeshOverlayController.cpp
     overlays/StoreMeshOverlayController.hpp
+    overlays/StoreMeshData.cpp
+    overlays/StoreMeshData.hpp
+    overlays/MeshColour.hpp
+    overlays/UmbilicusData.cpp
+    overlays/UmbilicusData.hpp
+    overlays/UmbilicusOverlayController.cpp
+    overlays/UmbilicusOverlayController.hpp
     SurfaceIntersectionStyle.hpp
     overlays/SegmentationOverlayController.hpp
     overlays/PointsOverlayController.cpp

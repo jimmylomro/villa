@@ -4,7 +4,9 @@
 #include "vc/core/util/Compositing.hpp"
 #include <QOpenGLWidget>
 #include <QOpenGLFunctions_3_3_Core>
+#include <array>
 #include <memory>
+#include <vector>
 
 namespace vc3d::scene3d
 {
@@ -36,6 +38,17 @@ public:
     std::shared_ptr<const surface::Mesh> surfaceMesh() const;
     bool isSurfaceMeshReady() const;
     void setSurfaceTextured(bool enabled);
+    bool isSurfaceTextured() const;
+    // Mesh mode: shade the mesh with its per-vertex colour (per-mesh colour or baked CT gray).
+    void setSurfaceUseVertexColor(bool enabled);
+    // Mesh CT: sample the ctVolume slab per-fragment on the mesh faces (reuses the volume 3D texture).
+    void setSurfaceVolumeSample(bool enabled);
+    // Shared CT texture OME-Zarr level (segment atlas + mesh atlas); -1 = auto.
+    void setSurfaceTextureLevel(int level);
+    int surfaceTextureLevel() const;
+    // The current volume's umbilicus polyline (volume voxels, x,y,z), drawn as a line when visible.
+    void setUmbilicus(const std::vector<std::array<double, 3>>& points);
+    void setUmbilicusVisible(bool visible);
     void setSurfaceOpacity(float opacity);
     void setSurfaceVisible(bool visible);
     bool isSurfaceVisible() const;
@@ -48,6 +61,10 @@ public:
 signals:
     void volumeTextureLimitChanged(int maxEdge);
     void surfaceDisplayChanged();
+    // Emitted when the shared "CT texture" checkbox toggles, so the mesh source can re-bake.
+    void surfaceTexturedChanged(bool enabled);
+    // Emitted when the shared CT texture level combo changes, so the mesh source can re-bake.
+    void surfaceTextureLevelChanged(int level);
     void viewScaleChanged();
     void positionClicked(QPointF position, bool context, QPoint globalPosition);
     void emptyContextRequested(QPoint globalPosition);
@@ -68,6 +85,7 @@ protected:
     void beginFrame();
     void drawSurface();
     void drawCTSlices();
+    void drawUmbilicus();
     GLuint uploadCTTexture(const ct::Tile& tile);
     void fitBounds(const Bounds&);
 

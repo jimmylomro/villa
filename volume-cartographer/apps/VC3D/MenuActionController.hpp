@@ -18,6 +18,7 @@
 #include <functional>
 
 class QAction;
+class QActionGroup;
 class QDialog;
 class QMenu;
 class QMenuBar;
@@ -45,6 +46,10 @@ public:
     void refreshRecentMenu();
 
     // CWindow installs a handler that forwards the View > Meshes visibility set to the mesh overlay.
+    void setUmbilicusVisibilityHandler(std::function<void(const std::string&)> handler)
+    {
+        _onUmbilicusVisibility = std::move(handler);
+    }
     void setMeshVisibilityHandler(std::function<void(const std::vector<std::string>&)> handler)
     {
         _onMeshVisibility = std::move(handler);
@@ -161,6 +166,7 @@ private:
     // The Stores menu: the stores beside the project and the store each kind uses.
     void refreshStoresMenu();
     void refreshMeshesMenu();
+    void refreshUmbilicusMenu();
     QStringList loadRecentPaths() const;
     void saveRecentPaths(const QStringList& paths);
     void ensureRecentActions();
@@ -216,7 +222,12 @@ private:
     QMenu* _recentMenu{nullptr};
     QMenu* _storesMenu{nullptr};
     QMenu* _meshesMenu{nullptr};
+    QActionGroup* _meshesGroup{nullptr};   // makes View > Meshes single-select
     std::set<std::string> _visibleMeshes;
+    QMenu* _umbilicusMenu{nullptr};
+    QActionGroup* _umbilicusGroup{nullptr};   // View > Umbilicus single-select (global show/hide)
+    std::string _selectedUmbilicus;
+    std::function<void(const std::string&)> _onUmbilicusVisibility;
     std::function<void(const std::vector<std::string>&)> _onMeshVisibility;
 
     QAction* _newProjectAct{nullptr};

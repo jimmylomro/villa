@@ -69,6 +69,7 @@ class SurfacePanelController;
 class SurfaceCatalog;
 class StoreSurfaceOverlayController;
 class StoreMeshOverlayController;
+class UmbilicusOverlayController;
 class MenuActionController;
 class StoreImportController;
 class VolumeAttachmentController;
@@ -93,6 +94,7 @@ class SpiralWorkspace;
 class ProjectWorkspace;
 class FiberMapWorkspace;
 namespace vc3d::fibers3d { class Fiber3DPanel; }
+namespace vc3d::scene3d { class Scene3DPanel; }
 
 class CWindow : public QMainWindow
 {
@@ -161,7 +163,10 @@ private:
     // The status bar's fiber-length readout: the line length of the fiber
     // open in the active Line Annotation tab; hidden for any other tab.
     void updateLineAnnotationLengthLabel();
-    void populateDockToggleMenu(QMenu* menu) const;
+    void populateDockToggleMenu(QMenu* menu, bool includeFibers = true) const;
+    // The "Fibers" dock-toggle submenu on its own, so the View menu can place it
+    // alongside Meshes/Umbilicus instead of up with the other dock toggles.
+    void populateFiberDockMenu(QMenu* menu) const;
     void switchToLasagnaWorkspace();
     void switchToMainWorkspace();
     void openLineAnnotationWorkspace(LineAnnotationDialog* dialog, const QString& title);
@@ -281,6 +286,7 @@ private:
     QDockWidget* _fibers3DDock{nullptr};
     vc3d::fibers3d::Fiber3DPanel* _fibers3DPanel{nullptr};
     QDockWidget* _scene3DDock{nullptr};
+    vc3d::scene3d::Scene3DPanel* _scene3DPanel{nullptr};
 
     SurfaceTreeWidget *treeWidgetSurfaces;
 
@@ -346,6 +352,7 @@ private:
     std::unique_ptr<PlaneSlicingOverlayController> _planeSlicingOverlay;
     std::unique_ptr<StoreSurfaceOverlayController> _storeSurfaceOverlay;
     std::unique_ptr<StoreMeshOverlayController> _storeMeshOverlay;
+    std::unique_ptr<UmbilicusOverlayController> _umbilicusOverlay;
     std::unique_ptr<SurfaceRotationOverlayController> _surfaceRotationOverlay;
     std::unique_ptr<FiberCollectionController> _fiberCollection;
     std::unique_ptr<SegmentationModule> _segmentationModule;

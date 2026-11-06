@@ -16,6 +16,8 @@ public:
     ~Fiber3DSurfaceControls() override;
     void resume();
     void suspend();
+    // Show external progress text in this panel's status label (used by the mesh view while suspended).
+    void setStatus(const QString& text);
     void setMemoryBudget(size_t bytes);
     // Standalone viewer: derive the display surface from the active CT volume.
     void setVolumeSource(bool);

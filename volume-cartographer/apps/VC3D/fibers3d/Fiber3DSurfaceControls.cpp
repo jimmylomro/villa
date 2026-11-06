@@ -108,6 +108,7 @@ struct Fiber3DSurfaceControls::Impl {
             preferredTextureLevel = textureLevel->currentData().toInt();
             QSettings prefs(vc3d::settingsFilePath(), QSettings::IniFormat);
             prefs.setValue(settingsGroup + QStringLiteral("/surfaceTextureLevel"), preferredTextureLevel);
+            canvas->setSurfaceTextureLevel(preferredTextureLevel);   // also re-bakes the mesh atlas in mesh mode
             invalidate();
         });
         QObject::connect(textured, &QCheckBox::toggled, q, [this](bool on) {
@@ -345,6 +346,13 @@ struct Fiber3DSurfaceControls::Impl {
     }
     void invalidate()
     {
+        // While suspended, another source (e.g. the 3D "Meshes + slices" view) owns the canvas surface.
+        // Never clear or re-bake it here, or changing a surface control (texture level, CT toggle, …) would
+        // wipe that mesh and, because we're suspended, never restore it.
+        if (suspended) {
+            pending = wanted();
+            return;
+        }
         clear();
         if (!wanted()) {
             status->setText(volumeSource ? q->tr("CT volume hidden") : q->tr("Surface selected in Main"));
@@ -426,6 +434,10 @@ void Fiber3DSurfaceControls::suspend()
 {
     d->suspended = true;
     d->clear();
+}
+void Fiber3DSurfaceControls::setStatus(const QString& text)
+{
+    d->status->setText(text);
 }
 void Fiber3DSurfaceControls::setMemoryBudget(size_t bytes)
 {

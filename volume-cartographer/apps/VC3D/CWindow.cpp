@@ -110,6 +110,8 @@
 #include "SurfaceCatalog.hpp"
 #include "overlays/StoreSurfaceOverlayController.hpp"
 #include "overlays/StoreMeshOverlayController.hpp"
+#include "overlays/UmbilicusOverlayController.hpp"
+#include "overlays/UmbilicusData.hpp"
 #include "SurfacePanelController.hpp"
 #include "elements/GrowOnlyLabel.hpp"
 #include "MenuActionController.hpp"
@@ -1119,7 +1121,15 @@ CWindow::CWindow(size_t cacheSizeGB) :
     if (_storeMeshOverlay)
         _menuController->setMeshVisibilityHandler([this](const std::vector<std::string>& uuids) {
             if (_storeMeshOverlay) _storeMeshOverlay->setMeshes(uuids);
+            // Same visible set drives the 3D "Meshes + slices" mode.
+            if (_scene3DPanel) _scene3DPanel->setVisibleMeshes(uuids);
         });
+    // View > Umbilicus single-selection = global show/hide; feeds the 2D overlay and the 3D panel/canvas.
+    _menuController->setUmbilicusVisibilityHandler([this](const std::string& uuid) {
+        const auto points = vc3d::readStoreUmbilicus(_state, uuid);
+        if (_umbilicusOverlay) _umbilicusOverlay->setUmbilicus(points);
+        if (_scene3DPanel) _scene3DPanel->setUmbilicusPoints(points);
+    });
     connect(_menuController.get(), &MenuActionController::growTrackPatchesFromMenuRequested,
             this, [this]() {
                 _segmentationCommandHandler->onGrowTrackPatches();
@@ -1625,7 +1635,7 @@ CWindow::~CWindow()
     CloseVolume();
 }
 
-void CWindow::populateDockToggleMenu(QMenu* menu) const
+void CWindow::populateDockToggleMenu(QMenu* menu, bool includeFibers) const
 {
     if (!menu) {
         return;
@@ -1651,10 +1661,22 @@ void CWindow::populateDockToggleMenu(QMenu* menu) const
     addDock(menu, _point_collection_widget);
     addDock(menu, _wrapAnnotationWidget);
 
-    if (_fiberWidget || _fibers3DDock) {
-        auto* fiberMenu = menu->addMenu(tr("Fibers"));
-        addDock(fiberMenu, _fiberWidget);
-        addDock(fiberMenu, _fibers3DDock);
+    if (includeFibers) {
+        populateFiberDockMenu(menu);
+    }
+}
+
+void CWindow::populateFiberDockMenu(QMenu* menu) const
+{
+    if (!menu || !(_fiberWidget || _fibers3DDock)) {
+        return;
+    }
+    auto* fiberMenu = menu->addMenu(tr("Fibers"));
+    if (_fiberWidget) {
+        fiberMenu->addAction(_fiberWidget->toggleViewAction());
+    }
+    if (_fibers3DDock) {
+        fiberMenu->addAction(_fibers3DDock->toggleViewAction());
     }
 }
 
@@ -2726,6 +2748,7 @@ void CWindow::CreateWidgets(void)
         this);
     _storeSurfaceOverlay = std::make_unique<StoreSurfaceOverlayController>(_state, _viewerManager.get(), this);
     _storeMeshOverlay = std::make_unique<StoreMeshOverlayController>(_state, _viewerManager.get(), this);
+    _umbilicusOverlay = std::make_unique<UmbilicusOverlayController>(_state, _viewerManager.get(), this);
     // NB: the View > Meshes handler is wired after _menuController is created (in
     // the constructor), not here -- _menuController is still null during CreateWidgets().
     connect(_surfacePanel.get(), &SurfacePanelController::visibleSurfacesChanged,
@@ -3480,6 +3503,7 @@ void CWindow::CreateWidgets(void)
     _scene3DDock = new QDockWidget(tr("3D Viewer"), _segmentWorkspaceWindow);
     _scene3DDock->setObjectName(QStringLiteral("scene3DDock"));
     auto* scenePanel = new vc3d::scene3d::Scene3DPanel(_state, _viewerManager.get(), _scene3DDock);
+    _scene3DPanel = scenePanel;
     _scene3DDock->setWidget(scenePanel);
     ensureDockWidgetFeatures(_scene3DDock);
     _segmentWorkspaceWindow->addDockWidget(Qt::RightDockWidgetArea, _scene3DDock);
